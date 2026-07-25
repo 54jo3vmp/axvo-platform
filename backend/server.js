@@ -6,6 +6,8 @@ const express = require('express');
 const cors = require('cors');
 const { checkConnection } = require('./db');
 const { runMigrations } = require('./migrate');
+const authRoutes = require('./routes/auth.routes');
+const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,6 +51,9 @@ app.get('/api/v1/health', async (req, res) => {
   res.status(httpStatus).json(health);
 });
 
+// Sprint 4 — Phase 2 Authentication (register/login only; more endpoints later)
+app.use('/api/v1/auth', authRoutes);
+
 // Fallback 404 handler (part of "統一錯誤處理" — will be expanded in a later Sprint)
 app.use((req, res) => {
   res.status(404).json({
@@ -58,6 +63,9 @@ app.use((req, res) => {
     }
   });
 });
+
+// Centralized error handler — must be registered last, after all routes
+app.use(errorHandler);
 
 async function start() {
   try {
