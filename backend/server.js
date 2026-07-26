@@ -7,7 +7,9 @@ const cors = require('cors');
 const { checkConnection } = require('./db');
 const { runMigrations } = require('./migrate');
 const authRoutes = require('./routes/auth.routes');
+const sessionRoutes = require('./routes/session.routes');
 const errorHandler = require('./middleware/errorHandler');
+const authenticate = require('./middleware/authenticate');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -57,6 +59,9 @@ app.get('/api/v1/health', async (req, res) => {
 
 // Sprint 4 — Phase 2 Authentication (register/login only; more endpoints later)
 app.use('/api/v1/auth', authRoutes);
+
+// Sprint 6 — Login History + Device Management (requires a valid access token)
+app.use('/api/v1/sessions', authenticate, sessionRoutes);
 
 // Fallback 404 handler (part of "統一錯誤處理" — will be expanded in a later Sprint)
 app.use((req, res) => {
