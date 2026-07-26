@@ -12,6 +12,10 @@ const errorHandler = require('./middleware/errorHandler');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Render sits behind a reverse proxy — this makes req.ip reflect the
+// real client IP (from X-Forwarded-For) instead of Render's internal IP.
+app.set('trust proxy', true);
+
 // Tracks the result of the most recent migration run, exposed via /api/v1/health
 let lastMigrationResult = null;
 

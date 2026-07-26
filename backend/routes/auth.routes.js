@@ -25,8 +25,28 @@ router.post(
   '/login',
   asyncHandler(async (req, res) => {
     const { email, password } = req.body || {};
-    const result = await authService.login({ email, password });
+    const ipAddress = req.ip;
+    const userAgent = req.get('user-agent');
+    const result = await authService.login({ email, password, ipAddress, userAgent });
     res.status(200).json(result);
+  })
+);
+
+router.post(
+  '/refresh',
+  asyncHandler(async (req, res) => {
+    const { refresh_token } = req.body || {};
+    const result = await authService.refreshAccessToken(refresh_token);
+    res.status(200).json(result);
+  })
+);
+
+router.post(
+  '/logout',
+  asyncHandler(async (req, res) => {
+    const { refresh_token } = req.body || {};
+    await authService.logout(refresh_token);
+    res.status(200).json({ message: 'Logged out successfully' });
   })
 );
 
