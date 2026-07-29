@@ -42,6 +42,15 @@ router.post(
 );
 
 router.post(
+  '/verify-email',
+  asyncHandler(async (req, res) => {
+    const { token } = req.body || {};
+    const result = await authService.verifyEmail(token);
+    res.status(200).json(result);
+  })
+);
+
+router.post(
   '/logout',
   asyncHandler(async (req, res) => {
     const { refresh_token } = req.body || {};

@@ -27,4 +27,8 @@ async function createUser({ email, passwordHash }) {
   return result.rows[0];
 }
 
-module.exports = { findByEmail, findById, createUser };
+async function markEmailVerified(userId) {
+  await pool.query('UPDATE users SET email_verified_at = now() WHERE id = $1', [userId]);
+}
+
+module.exports = { findByEmail, findById, createUser, markEmailVerified };

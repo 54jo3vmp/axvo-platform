@@ -5,14 +5,45 @@
 const userRepository = require('../repositories/user.repository');
 const sessionRepository = require('../repositories/session.repository');
 const refreshTokenRepository = require('../repositories/refreshToken.repository');
+const emailVerificationRepository = require('../repositories/emailVerification.repository');
 const { hashPassword, comparePassword } = require('../utils/password');
 const { signAccessToken, ACCESS_TOKEN_EXPIRES_IN } = require('../utils/jwt');
 const { generateRefreshToken, hashToken } = require('../utils/tokens');
+const { sendEmail } = require('../utils/email');
 const { AppError } = require('../utils/errors');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+async function sendVerificationEmail(user) {
+  const tokenPlain = generateRefreshToken(); // reused generator — just a random high-entropy string
+  const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS);
+
+  await emailVerificationRepository.createToken({
+    userId: user.id,
+    tokenHash: hashToken(tokenPlain),
+    expiresAt
+  });
+
+  try {
+    await sendEmail({
+      to: user.email,
+      subject: 'AXVO — 請驗證你的 Email',
+      html: `
+        <p>歡迎加入 AXVO！</p>
+        <p>你的驗證碼是：</p>
+        <p style="font-size: 20px; font-weight: bold; letter-spacing: 1px;">${tokenPlain}</p>
+        <p>這組驗證碼將在 24 小時後失效。</p>
+      `
+    });
+  } catch (err) {
+    // Registration should still succeed even if the email fails to send —
+    // the user (or an admin) can trigger a resend later.
+    console.error('[auth] Failed to send verification email:', err.message);
+  }
+}
 
 async function register({ email, password }) {
   if (!email || !EMAIL_REGEX.test(email)) {
@@ -33,7 +64,27 @@ async function register({ email, password }) {
 
   const passwordHash = await hashPassword(password);
   const user = await userRepository.createUser({ email, passwordHash });
+
+  await sendVerificationEmail(user);
+
   return user;
+}
+
+async function verifyEmail(tokenPlain) {
+  if (!tokenPlain) {
+    throw new AppError('MISSING_TOKEN', 'Verification token is required', 400);
+  }
+
+  const tokenHash = hashToken(tokenPlain);
+  const stored = await emailVerificationRepository.findValidByHash(tokenHash);
+  if (!stored) {
+    throw new AppError('INVALID_TOKEN', 'Verification token is invalid or expired', 401);
+  }
+
+  await emailVerificationRepository.markUsed(stored.id);
+  await userRepository.markEmailVerified(stored.user_id);
+
+  return { message: 'Email verified successfully' };
 }
 
 async function login({ email, password, ipAddress, userAgent }) {
@@ -125,4 +176,4 @@ async function logout(refreshTokenPlain) {
   await refreshTokenRepository.revokeByHash(hashToken(refreshTokenPlain));
 }
 
-module.exports = { register, login, refreshAccessToken, logout };
+module.exports = { register, login, refreshAccessToken, logout, verifyEmail };
