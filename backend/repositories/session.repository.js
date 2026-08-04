@@ -49,10 +49,18 @@ async function findByIdAndUserId(id, userId) {
   return result.rows[0] || null;
 }
 
+async function revokeAllForUser(userId) {
+  await pool.query(
+    'UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL',
+    [userId]
+  );
+}
+
 module.exports = {
   createSession,
   revokeSession,
   findActiveByUserId,
   findAllByUserId,
-  findByIdAndUserId
+  findByIdAndUserId,
+  revokeAllForUser
 };

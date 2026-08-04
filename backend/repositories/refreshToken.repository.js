@@ -29,4 +29,17 @@ async function revokeByHash(tokenHash) {
   await pool.query('UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1', [tokenHash]);
 }
 
-module.exports = { createRefreshToken, findValidByHash, revokeById, revokeByHash };
+async function revokeAllForUser(userId) {
+  await pool.query(
+    'UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL',
+    [userId]
+  );
+}
+
+module.exports = {
+  createRefreshToken,
+  findValidByHash,
+  revokeById,
+  revokeByHash,
+  revokeAllForUser
+};

@@ -51,6 +51,24 @@ router.post(
 );
 
 router.post(
+  '/forgot-password',
+  asyncHandler(async (req, res) => {
+    const { email } = req.body || {};
+    const result = await authService.forgotPassword({ email });
+    res.status(200).json(result);
+  })
+);
+
+router.post(
+  '/reset-password',
+  asyncHandler(async (req, res) => {
+    const { token, new_password: newPassword } = req.body || {};
+    const result = await authService.resetPassword({ token, newPassword });
+    res.status(200).json(result);
+  })
+);
+
+router.post(
   '/logout',
   asyncHandler(async (req, res) => {
     const { refresh_token } = req.body || {};

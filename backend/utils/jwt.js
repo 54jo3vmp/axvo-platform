@@ -21,4 +21,29 @@ function verifyAccessToken(token) {
   return jwt.verify(token, ACCESS_TOKEN_SECRET);
 }
 
-module.exports = { signAccessToken, verifyAccessToken, ACCESS_TOKEN_EXPIRES_IN };
+const TWO_FACTOR_PENDING_EXPIRES_IN = '5m';
+
+function signTwoFactorPendingToken(payload) {
+  if (!ACCESS_TOKEN_SECRET) {
+    throw new Error('JWT_SECRET environment variable is not set');
+  }
+  return jwt.sign({ ...payload, purpose: '2fa_pending' }, ACCESS_TOKEN_SECRET, {
+    expiresIn: TWO_FACTOR_PENDING_EXPIRES_IN
+  });
+}
+
+function verifyTwoFactorPendingToken(token) {
+  const payload = verifyAccessToken(token);
+  if (payload.purpose !== '2fa_pending') {
+    throw new Error('Token is not a valid 2FA pending token');
+  }
+  return payload;
+}
+
+module.exports = {
+  signAccessToken,
+  verifyAccessToken,
+  ACCESS_TOKEN_EXPIRES_IN,
+  signTwoFactorPendingToken,
+  verifyTwoFactorPendingToken
+};

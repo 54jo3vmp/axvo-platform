@@ -8,6 +8,9 @@ const { checkConnection } = require('./db');
 const { runMigrations } = require('./migrate');
 const authRoutes = require('./routes/auth.routes');
 const sessionRoutes = require('./routes/session.routes');
+const twoFactorRoutes = require('./routes/twoFactor.routes');
+const profileRoutes = require('./routes/profile.routes');
+const referenceRoutes = require('./routes/reference.routes');
 const errorHandler = require('./middleware/errorHandler');
 const authenticate = require('./middleware/authenticate');
 
@@ -60,8 +63,20 @@ app.get('/api/v1/health', async (req, res) => {
 // Sprint 4 — Phase 2 Authentication (register/login only; more endpoints later)
 app.use('/api/v1/auth', authRoutes);
 
+// Sprint 9 — 2FA login verification step (public: happens mid-login, before a session exists)
+app.post('/api/v1/auth/2fa/verify', twoFactorRoutes.verifyLoginHandler);
+
 // Sprint 6 — Login History + Device Management (requires a valid access token)
 app.use('/api/v1/sessions', authenticate, sessionRoutes);
+
+// Sprint 9 — 2FA setup/enable/disable (requires a valid access token)
+app.use('/api/v1/2fa', authenticate, twoFactorRoutes);
+
+// Sprint 10 — Phase 3: Profile (requires a valid access token)
+app.use('/api/v1/profile', authenticate, profileRoutes);
+
+// Sprint 10 — Reference data (public: countries, currencies)
+app.use('/api/v1', referenceRoutes);
 
 // Fallback 404 handler (part of "統一錯誤處理" — will be expanded in a later Sprint)
 app.use((req, res) => {

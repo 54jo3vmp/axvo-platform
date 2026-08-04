@@ -6,16 +6,24 @@ const userRepository = require('../repositories/user.repository');
 const sessionRepository = require('../repositories/session.repository');
 const refreshTokenRepository = require('../repositories/refreshToken.repository');
 const emailVerificationRepository = require('../repositories/emailVerification.repository');
+const passwordResetRepository = require('../repositories/passwordReset.repository');
 const { hashPassword, comparePassword } = require('../utils/password');
-const { signAccessToken, ACCESS_TOKEN_EXPIRES_IN } = require('../utils/jwt');
+const {
+  signAccessToken,
+  ACCESS_TOKEN_EXPIRES_IN,
+  signTwoFactorPendingToken,
+  verifyTwoFactorPendingToken
+} = require('../utils/jwt');
 const { generateRefreshToken, hashToken } = require('../utils/tokens');
 const { sendEmail } = require('../utils/email');
+const { verifyCode: verifyTwoFactorCode } = require('../utils/twoFactor');
 const { AppError } = require('../utils/errors');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 async function sendVerificationEmail(user) {
   const tokenPlain = generateRefreshToken(); // reused generator — just a random high-entropy string
@@ -87,25 +95,7 @@ async function verifyEmail(tokenPlain) {
   return { message: 'Email verified successfully' };
 }
 
-async function login({ email, password, ipAddress, userAgent }) {
-  if (!email || !password) {
-    throw new AppError('MISSING_CREDENTIALS', 'Email and password are required', 400);
-  }
-
-  const user = await userRepository.findByEmail(email);
-  if (!user) {
-    throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
-  }
-
-  const passwordMatches = await comparePassword(password, user.password_hash);
-  if (!passwordMatches) {
-    throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
-  }
-
-  if (user.status !== 'active') {
-    throw new AppError('ACCOUNT_DISABLED', 'This account is not active', 403);
-  }
-
+async function issueLoginTokens(user, ipAddress, userAgent) {
   const accessToken = signAccessToken({ sub: user.id, email: user.email, role: user.role });
 
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
@@ -130,6 +120,60 @@ async function login({ email, password, ipAddress, userAgent }) {
       status: user.status
     }
   };
+}
+
+async function login({ email, password, ipAddress, userAgent }) {
+  if (!email || !password) {
+    throw new AppError('MISSING_CREDENTIALS', 'Email and password are required', 400);
+  }
+
+  const user = await userRepository.findByEmail(email);
+  if (!user) {
+    throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
+  }
+
+  const passwordMatches = await comparePassword(password, user.password_hash);
+  if (!passwordMatches) {
+    throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
+  }
+
+  if (user.status !== 'active') {
+    throw new AppError('ACCOUNT_DISABLED', 'This account is not active', 403);
+  }
+
+  if (user.two_factor_enabled) {
+    // Password is correct, but the login isn't complete until the user
+    // also provides a valid TOTP code via /2fa/verify.
+    const pendingToken = signTwoFactorPendingToken({ sub: user.id });
+    return { requires_2fa: true, pending_token: pendingToken };
+  }
+
+  return issueLoginTokens(user, ipAddress, userAgent);
+}
+
+async function verifyTwoFactorLogin({ pendingToken, code, ipAddress, userAgent }) {
+  if (!pendingToken || !code) {
+    throw new AppError('MISSING_FIELDS', 'pending_token and code are required', 400);
+  }
+
+  let payload;
+  try {
+    payload = verifyTwoFactorPendingToken(pendingToken);
+  } catch (err) {
+    throw new AppError('INVALID_PENDING_TOKEN', 'This login attempt has expired, please log in again', 401);
+  }
+
+  const user = await userRepository.findById(payload.sub);
+  if (!user || !user.two_factor_enabled) {
+    throw new AppError('INVALID_STATE', 'Two-factor authentication is not active for this account', 400);
+  }
+
+  const valid = verifyTwoFactorCode(code, user.two_factor_secret);
+  if (!valid) {
+    throw new AppError('INVALID_CODE', 'The verification code is invalid', 401);
+  }
+
+  return issueLoginTokens(user, ipAddress, userAgent);
 }
 
 async function refreshAccessToken(refreshTokenPlain) {
@@ -176,4 +220,81 @@ async function logout(refreshTokenPlain) {
   await refreshTokenRepository.revokeByHash(hashToken(refreshTokenPlain));
 }
 
-module.exports = { register, login, refreshAccessToken, logout, verifyEmail };
+async function forgotPassword({ email }) {
+  // Always respond the same way whether or not the email exists —
+  // this prevents attackers from using this endpoint to discover
+  // which emails are registered.
+  if (!email) {
+    throw new AppError('MISSING_EMAIL', 'Email is required', 400);
+  }
+
+  const user = await userRepository.findByEmail(email);
+  if (user) {
+    const tokenPlain = generateRefreshToken();
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+
+    await passwordResetRepository.createToken({
+      userId: user.id,
+      tokenHash: hashToken(tokenPlain),
+      expiresAt
+    });
+
+    try {
+      await sendEmail({
+        to: user.email,
+        subject: 'AXVO — 重設密碼',
+        html: `
+          <p>我們收到了重設你 AXVO 密碼的請求。</p>
+          <p>你的重設密碼驗證碼是：</p>
+          <p style="font-size: 20px; font-weight: bold; letter-spacing: 1px;">${tokenPlain}</p>
+          <p>這組驗證碼將在 1 小時後失效。如果不是你本人操作，請忽略這封信。</p>
+        `
+      });
+    } catch (err) {
+      console.error('[auth] Failed to send password reset email:', err.message);
+    }
+  }
+
+  return { message: 'If that email exists, a reset code has been sent.' };
+}
+
+async function resetPassword({ token, newPassword }) {
+  if (!token) {
+    throw new AppError('MISSING_TOKEN', 'Reset token is required', 400);
+  }
+  if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new AppError(
+      'WEAK_PASSWORD',
+      `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+      400
+    );
+  }
+
+  const tokenHash = hashToken(token);
+  const stored = await passwordResetRepository.findValidByHash(tokenHash);
+  if (!stored) {
+    throw new AppError('INVALID_TOKEN', 'Reset token is invalid or expired', 401);
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+  await userRepository.updatePassword(stored.user_id, passwordHash);
+  await passwordResetRepository.markUsed(stored.id);
+
+  // Security: a password reset should invalidate every existing login,
+  // in case the account was compromised.
+  await refreshTokenRepository.revokeAllForUser(stored.user_id);
+  await sessionRepository.revokeAllForUser(stored.user_id);
+
+  return { message: 'Password reset successfully. Please log in again.' };
+}
+
+module.exports = {
+  register,
+  login,
+  verifyTwoFactorLogin,
+  refreshAccessToken,
+  logout,
+  verifyEmail,
+  forgotPassword,
+  resetPassword
+};
